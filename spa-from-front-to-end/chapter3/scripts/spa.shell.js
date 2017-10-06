@@ -14,7 +14,7 @@
 spa.shell = (function () {
     var configMap = {
             anchor_schema_map: {
-                chat: {open: true, closed: true}
+                chat: {opened: true, closed: true}
             },
             main_Html: String()
                 + '<div class="spa-shell-head">'
@@ -27,28 +27,24 @@ spa.shell = (function () {
                     + '<div class="spa-shell-main-content"></div>'
                 + '</div>'
                 + '<div class="spa-shell-foot"></div>'
-                + '<div class="spa-shell-chat"></div>'
                 + '<div class="spa-shell-modal"></div>',
-            chat_extend_time: 1000,
-            chat_retract_time: 300,
-            chat_extend_height: 450,
-            chat_retract_height: 15,
-            chat_extended_title: 'Click to retract',
-            chat_retracted_title: 'Click to extend'
+
+            resize_interval: 200
         },
         stateMap = {
-            $container: null,
-            is_chat_retracted: true,
-            anchor_map: {}  // 将当前锚的值保存在表示模块状态的映射中
+            anchor_map: {},  // 将当前锚的值保存在表示模块状态的映射中
+            resize_idto: undefined
         }, // share info
         jqueryMap = {}, // dom ele
-        setJqueryMap, initModule, toggleChat, onClickChat, copyAnchorMap, changeAnchorPart, onHashChange,
+        setJqueryMap, initModule, copyAnchorMap, onResize,
+        changeAnchorPart, onHashChange, setChatAnchor;
         // deep copy
         copyAnchorMap = function () {
             return $.extend(true, {}, stateMap.anchor_map);
         };
 
     // change part of the uri anchor component (atomically update)
+    // Only independent keys and their matching dependent keys are processed
     // arguments:
     //      arg_map -  desc what part of the uri was update
     changeAnchorPart = function (arg_map) {
@@ -58,8 +54,14 @@ spa.shell = (function () {
         KEYVAL:
         for(key_name in arg_map){
             if(arg_map.hasOwnProperty(key_name)){
+
+                // skip dependent keys during iteration
                 if(key_name.indexOf('_') === 0){ continue KEYVAL;}
+
+                // update independent key value
                 anchor_map_revise[key_name] = arg_map[key_name];
+
+                // update matching dependent key
                 key_name_dep = '_' + key_name;
                 if(arg_map[key_name_dep]){
                     anchor_map_revise[key_name_dep] = arg_map[key_name_dep];
@@ -81,50 +83,8 @@ spa.shell = (function () {
     setJqueryMap =  function () {
         var $container = stateMap.$container;
         jqueryMap = {
-            $container: $container,
-            $chat: $container.find('.spa-shell-chat')
+            $container: $container
         };
-    };
-
-    toggleChat = function (do_extend, callback) {
-        var chat_height = jqueryMap.$chat.height(),
-            isOpen = chat_height === configMap.chat_extend_height,
-            isClosed = chat_height === configMap.chat_retract_height,
-            isSliding = !isClosed && !isOpen;
-        if(isSliding){
-            return false;
-        }
-        if(do_extend){
-            jqueryMap.$chat.animate(
-                {height: configMap.chat_extend_height},
-                configMap.chat_extend_time,
-                function () {
-                    jqueryMap.$chat.attr('title', configMap.chat_extended_title);
-                    stateMap.is_chat_retracted = false;
-                    if(callback){callback(jqueryMap.$chat)}
-                }
-            );
-            return true;
-        }else {
-            jqueryMap.$chat.animate(
-                {height: configMap.chat_retract_height},
-                configMap.chat_retract_time,
-                function () {
-                    jqueryMap.$chat.attr('title', configMap.chat_retracted_title);
-                    stateMap.is_chat_retracted = true;
-                    if(callback){callback(jqueryMap.$chat)}
-                }
-            );
-            return true;
-        }
-    };
-
-    // eventHandler
-    onClickChat = function (e) {
-        changeAnchorPart({
-           chat: (stateMap.is_chat_retracted ? 'open' : 'closed')
-        });
-        return false;
     };
 
     // handles the hashchange event
@@ -133,12 +93,11 @@ spa.shell = (function () {
             anchor_map_proposed,
             _s_chat_previous,
             _s_chat_proposed,
+            is_ok = true,
             s_chat_proposed;
-        console.log("anchor_map_previous=========>", anchor_map_previous);
         try {
             // Parses URI anchor and returns as map
             anchor_map_proposed = $.uriAnchor.makeAnchorMap();
-            console.log("anchor_map_proposed============>", anchor_map_proposed);
         }catch (error){
             $.uriAnchor.setAnchor(anchor_map_previous, null, true);
             return false;
@@ -146,44 +105,76 @@ spa.shell = (function () {
         stateMap.anchor_map = anchor_map_proposed;
         _s_chat_previous =  anchor_map_previous._s_chat;
         _s_chat_proposed = anchor_map_proposed._s_chat;
+        // Begin adjust chat component if changed
         if(!anchor_map_previous || _s_chat_previous !== _s_chat_proposed){
             s_chat_proposed = anchor_map_proposed.chat;
             switch (s_chat_proposed){
-                case 'open':
-                    toggleChat(true);
+                case 'opened':
+                    is_ok = spa.chat.setSliderPosition('opened');
                     break;
                 case 'closed':
-                    toggleChat(false);
+                    is_ok = spa.chat.setSliderPosition('closed');
                     break;
                 default:
-                    toggleChat(false);
+                    spa.chat.setSliderPosition('closed');
                     delete anchor_map_proposed.chat;
                     $.uriAnchor.setAnchor(anchor_map_proposed, null, true);
             }
         }
+        if(!is_ok){
+            if(anchor_map_previous){
+                $.uriAnchor.setAnchor(anchor_map_previous, null, true);
+                stateMap.anchor_map = anchor_map_previous;
+            }else {
+                delete anchor_map_proposed.chat;
+                $.uriAnchor.setAnchor(anchor_map_proposed, null, true);
+            }
+        }
         return false;
+    };
+
+    // 函数节流
+    onResize = function () {
+        // 只要当前没有尺寸调整计时器在运作，就运行onResize
+        if(stateMap.resize_idto){
+            return true;
+        }
+        spa.chat.handleResize();
+        stateMap.resize_idto = setTimeout(function () {
+            stateMap.resize_idto = undefined;
+        }, configMap.resize_interval);
+
+        return true;
+    };
+
+    // begin callback
+    setChatAnchor = function (position_type) {
+        return changeAnchorPart({chat: position_type});
     };
 
     // public method
     initModule = function ($container) {
         // init share status
         stateMap.$container = $container;
-        stateMap.is_chat_retracted = true;
         // init shell
         $container.html(configMap.main_Html);
         // init dom
         setJqueryMap();
-        // init module chat
-        jqueryMap.$chat
-            .attr('title', configMap.chat_retracted_title)
-            .click(onClickChat);
         // init uri anchor to use our schema
         // 配置uriAnchor插件，用于检测模式（schema）
         $.uriAnchor.configModule({
             schema_map: configMap.anchor_schema_map
         });
+        // config and init module chat
+        spa.chat.configModule({
+            set_chat_anchor: setChatAnchor,
+            chat_model: spa.model.chat,
+            people_model: spa.model.people
+        });
+        spa.chat.initModule(jqueryMap.$container);
         // 绑定事件并立即触发
         $(window)
+            .bind('resize', onResize)
             .bind('hashchange', onHashChange)
             .trigger('hashchange');
     };
