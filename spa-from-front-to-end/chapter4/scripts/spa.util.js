@@ -1,6 +1,6 @@
 /**
+ * 创建通用工具方法
  * spa.util.js
- * 工具方法
  * Created by chengyong.lin on 17/10/3.
  */
 
